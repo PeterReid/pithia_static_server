@@ -1,13 +1,16 @@
 #![feature(std_misc, fs, net, io, env, path, collections)]
 
+extern crate gridui;
+
 use std::net::{TcpListener, TcpStream};
 use std::thread::Thread;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::io;
-use std::str;
 use std::env;
 use std::u32;
+
+use gridui::glyphcode;
 
 fn read_exactly<R: Read>(source: &mut R, len: usize) -> io::Result<Vec<u8>> {
     println!("Attempting to read {} bytes", len);
@@ -43,16 +46,28 @@ fn handle_invalid_url(mut _stream: TcpStream) -> io::Result<()>  {
     Ok( () )
 }
 
+fn pack_u8s_to_u32s(bs: Vec<u8>) -> Vec<u32> {
+    (&bs[]).chunks(4).map(|chunk| {
+      (chunk[0] as u32) | ((chunk[1] as u32)<<8) | ((chunk[2] as u32)<<8) | ((chunk[3] as u32)<<8)
+    }).collect()
+}
+
 fn handle_client(mut stream: TcpStream) -> io::Result<()> {
     let working_dir = env::current_dir().unwrap();
     let static_root = working_dir.join("static");
     let handler_root = working_dir.join("handler");
 
-    let url_size = decode_u16_le(&try!(read_exactly(&mut stream, 2))[]) as usize;
-    println!("Going to read a url occupying {} bytes", url_size);
-    let url : Vec<u8> = try!(read_exactly(&mut stream, url_size));
+    let url_glyph_count = decode_u16_le(&try!(read_exactly(&mut stream, 2))[]) as usize;
+    let url_byte_count = url_glyph_count * 4;
+    println!("Going to read a url occupying {} glyphs ({} bytes)", url_glyph_count, url_byte_count);
+    let url : Vec<u32> = pack_u8s_to_u32s(try!(read_exactly(&mut stream, url_byte_count)));
     
-    let path_start = match url.position_elem(&b'/') {
+    println!("Url glyphcodes: {:?}", url);
+    
+    let slash = glyphcode::from_char('/').unwrap();
+    let dot = glyphcode::from_char('.').unwrap();
+    
+    let path_start = match url.position_elem(&slash) {
         Some(pos) => pos+1,
         None => url.len()
     };
@@ -64,27 +79,41 @@ fn handle_client(mut stream: TcpStream) -> io::Result<()> {
     
     let mut file_path = static_root;
     
-    for path_component in path.split(|x| { *x == b'/' }) {
-        if path_component.iter().all(|c| { *c==b'.' }) {
+    for path_component_glyphs in path.split(|x| { *x == slash }) {
+        let path_component : String = match glyphcode::to_string(path_component_glyphs) {
+            Some(s) => { s },
+            None => { return handle_invalid_url(stream); }
+        };
+        if path_component.chars().all(|c| { c == '.' }) {
             return handle_invalid_url(stream);
         }
         
         // No exotic characters allowed!
-        if path_component.iter().any(|c| { *c==b'\\' || *c <= 0x20 || *c>= 0x80}) {
+        if path_component.chars().any(|c| { c=='\\' || c <= (0x20 as char) || c>= (0x80 as char)}) {
             return handle_invalid_url(stream);
         }
         
-        if let Ok(s) = str::from_utf8(path_component) {
-            file_path.push(s);
-        } else {
-            return handle_invalid_url(stream);
-        }
+        file_path.push(path_component);
     }
     
-    let dot_position = path.rposition_elem(&b'.');
+    println!("Path: {:?}", file_path);
+    
+    let dot_position = match path.rposition_elem(&dot) {
+        Some(dot_position) => dot_position,
+        None => { return handle_invalid_url(stream); }
+    };
+    let after_dot = &path[dot_position+1..];
+    
+    let after_dot_str = if let Some(after_dot_str) = glyphcode::to_string(after_dot) {
+        after_dot_str
+    } else {
+        return handle_invalid_url(stream);
+    };
+    
+    println!("Extension: {:?}", after_dot_str);
     
     let mut handler_path = handler_root;
-    handler_path.push("txt");
+    handler_path.push(after_dot_str);
     println!("{:?}", handler_path);
     let mut handler_file = try!(File::open(&handler_path));
     let mut handler_bytes = Vec::new();
