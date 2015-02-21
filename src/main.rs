@@ -134,7 +134,6 @@ fn handle_client(mut stream: TcpStream) -> io::Result<()> {
     let content_byte_len = content_bytes.len();
     encode_u32_le(&mut handler_bytes[12.. 16], handler_byte_len as u32);
     encode_u32_le(&mut handler_bytes[16.. 20], content_byte_len as u32);
-    println!("{} {} {:?}", handler_bytes.len(), content_byte_len, content_bytes);
     let mut length_buffer = [0u8; 4];
     encode_u32_le(&mut length_buffer, (handler_bytes.len() + content_bytes.len()) as u32);
     
